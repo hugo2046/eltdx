@@ -310,6 +310,12 @@ with TdxClient() as client:
     print(all_kline.count)
 ```
 
+说明：
+
+- `get_kline()` 读取单页，单页最多 `800` 条。
+- `get_kline_all()` 自动翻页，返回整体时间升序结果，适合落库和画图。
+- `start=0` 通常表示从最近数据页开始，越大的 `start` 表示越早的数据偏移。
+
 ### 7.4 复权 K 线
 
 ```python
@@ -322,7 +328,21 @@ with TdxClient() as client:
     print(hfq.items[-1].close_price)
 ```
 
-### 7.5 K 线字段样例
+### 7.5 转成 JSON-friendly 结构
+
+```python
+from eltdx import TdxClient, to_jsonable
+
+with TdxClient() as client:
+    kline = client.get_kline("sz000001", "day", count=3)
+    payload = to_jsonable(kline)
+    print(payload["items"][0]["time"])
+    print(payload["items"][0]["close_price"])
+```
+
+这个形式适合 CLI、Web API、MCP tool 输出。`time` 会是 ISO 字符串，价格浮点字段和 `*_milli` 整数字段都会保留。
+
+### 7.6 K 线字段样例
 
 股票日线样例：
 

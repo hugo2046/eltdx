@@ -8,7 +8,7 @@ from .adjustment import apply_factors_to_kline, build_factor_response
 from .bse import fetch_bj_codes
 from .equity import compute_turnover, filter_equity_items, pick_equity
 from .exceptions import ProtocolError
-from .hosts import DEFAULT_HOSTS
+from .hosts import DEFAULT_HOSTS, DEFAULT_PROBE_TIMEOUT, DEFAULT_PROBE_WORKERS, sort_hosts_by_latency, unique_hosts
 from .models import Auction0925Result, CodePage, EquityResponse, FactorResponse, KlineResponse, SecurityCode, TradeResponse
 from .protocol.constants import CODE_PAGE_SIZE, HISTORY_TRADE_PAGE_SIZE, KLINE_PAGE_SIZE, TRADE_PAGE_SIZE
 from .protocol.unit import (
@@ -34,21 +34,32 @@ class TdxClient:
         timeout: float = 8.0,
         pool_size: int = 2,
         batch_size: int = 80,
+        probe_hosts: bool = False,
+        probe_timeout: float = DEFAULT_PROBE_TIMEOUT,
+        probe_workers: int = DEFAULT_PROBE_WORKERS,
     ) -> None:
-        resolved_hosts = list(hosts or ([host] if host else DEFAULT_HOSTS))
+        resolved_hosts = unique_hosts(list(hosts or ([host] if host else DEFAULT_HOSTS)))
         if not resolved_hosts:
             raise ValueError("at least one host is required")
+        if probe_hosts and len(resolved_hosts) > 1:
+            resolved_hosts = sort_hosts_by_latency(resolved_hosts, timeout=probe_timeout, max_workers=probe_workers)
 
         self._hosts = resolved_hosts
         self._timeout = timeout
         self._pool_size = max(1, pool_size)
         self._batch_size = min(80, max(1, batch_size))
-        self._connections = [TdxConnection(self._hosts, timeout=self._timeout) for _ in range(self._pool_size)]
+        self._connections = [TdxConnection(self._rotate_hosts(index), timeout=self._timeout) for index in range(self._pool_size)]
         self._executor: ThreadPoolExecutor | None = None
         self._round_robin = cycle(range(len(self._connections)))
         self._round_robin_lock = Lock()
         self._code_cache: dict[str, list[SecurityCode]] = {}
         self._connected = False
+
+    def _rotate_hosts(self, offset: int) -> list[str]:
+        if not self._hosts:
+            return []
+        index = offset % len(self._hosts)
+        return self._hosts[index:] + self._hosts[:index]
 
     def __enter__(self) -> TdxClient:
         self.connect()
@@ -60,10 +71,19 @@ class TdxClient:
     def connect(self) -> None:
         if self._connected:
             return
-        for connection in self._connections:
-            connection.connect()
-        self._executor = ThreadPoolExecutor(max_workers=len(self._connections), thread_name_prefix="eltdx-pool")
-        self._connected = True
+        try:
+            for connection in self._connections:
+                connection.connect()
+            self._executor = ThreadPoolExecutor(max_workers=len(self._connections), thread_name_prefix="eltdx-pool")
+            self._connected = True
+        except Exception:
+            if self._executor is not None:
+                self._executor.shutdown(wait=True)
+                self._executor = None
+            for connection in self._connections:
+                connection.close()
+            self._connected = False
+            raise
 
     def close(self) -> None:
         if self._executor is not None:

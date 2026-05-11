@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import socket
 import threading
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 from eltdx.exceptions import ConnectionClosedError, ProtocolError
 from eltdx.hosts import DEFAULT_HOSTS
 from eltdx.protocol.constants import TYPE_CALL_AUCTION, TYPE_CODE, TYPE_COUNT, TYPE_GBBQ, TYPE_HISTORY_MINUTE, TYPE_HISTORY_TRADE, TYPE_KLINE, TYPE_MINUTE, TYPE_QUOTE, TYPE_TRADE
-from eltdx.protocol.frame import ResponseFrame, decode_response, read_response_frame
+from eltdx.protocol.frame import RequestFrame, ResponseFrame
 from eltdx.protocol.model_call_auction import build_call_auction_frame, parse_call_auction_payload
 from eltdx.protocol.model_code import build_code_frame, parse_code_payload
 from eltdx.protocol.model_connect import build_connect_frame, build_heart_frame
@@ -28,86 +29,126 @@ class TdxConnection:
         self._timeout = timeout
         self._heartbeat_interval = heartbeat_interval
         self._lock = threading.Lock()
+        self._request_lock = threading.Lock()
+        self._msg_id_lock = threading.Lock()
         self._socket: socket.socket | None = None
         self._connected_host: str | None = None
         self._router = ResponseRouter()
         self._stop_event = threading.Event()
-        self._executor = ThreadPoolExecutor(max_workers=2)
-        self._reader = ResponseReader(self._stop_event, self._router.deliver, self._mark_disconnected)
-        self._heartbeat = HeartbeatLoop(self._stop_event, heartbeat_interval, self._send_heartbeat, self._is_connected, self._mark_disconnected)
+        self._executor: ThreadPoolExecutor | None = None
+        self._generation = 0
         self._msg_id = 1
 
     def connect(self) -> None:
+        executor_to_shutdown = None
         with self._lock:
             if self._is_connected():
                 return
-            self._stop_event.clear()
-            self._connect_socket()
-            self._executor.submit(self._reader.run, self._socket)
-            self._handshake()
-            self._executor.submit(self._heartbeat.run)
+            self._generation += 1
+            generation = self._generation
+            self._stop_event = threading.Event()
+            self._router.clear()
+            executor_to_shutdown = self._executor
+            self._executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="eltdx-connection")
+            try:
+                self._connect_socket()
+                assert self._socket is not None
+                reader = ResponseReader(self._stop_event, self._router.deliver, lambda: self._mark_disconnected(generation))
+                heartbeat = HeartbeatLoop(
+                    self._stop_event,
+                    self._heartbeat_interval,
+                    self._send_heartbeat,
+                    lambda: self._is_connected(generation),
+                    lambda: self._mark_disconnected(generation),
+                )
+                self._executor.submit(reader.run, self._socket)
+                self._handshake()
+                self._executor.submit(heartbeat.run)
+            except Exception:
+                failed_executor = self._executor
+                self._executor = None
+                self._generation += 1
+                self._close_socket_locked()
+                self._stop_event.set()
+                self._router.clear()
+                if failed_executor is not None:
+                    failed_executor.shutdown(wait=False, cancel_futures=True)
+                raise
+        if executor_to_shutdown is not None:
+            executor_to_shutdown.shutdown(wait=False, cancel_futures=True)
 
     def close(self) -> None:
+        self._close()
+
+    def _close(self, generation: int | None = None) -> None:
+        executor = None
         with self._lock:
+            if generation is not None and generation != self._generation:
+                return
+            self._generation += 1
             self._stop_event.set()
             self._router.clear()
-            if self._socket is not None:
-                try:
-                    self._socket.close()
-                finally:
-                    self._socket = None
-                    self._connected_host = None
+            self._close_socket_locked()
+            executor = self._executor
+            self._executor = None
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     @property
     def connected_host(self) -> str | None:
         return self._connected_host
 
     def request_count(self, exchange):
-        response = self._request(build_count_frame(exchange, self._next_msg_id()), TYPE_COUNT)
+        response = self._request_frame(lambda msg_id: build_count_frame(exchange, msg_id), TYPE_COUNT)
         return parse_count_payload(response)
 
     def request_codes(self, exchange, start: int):
-        response = self._request(build_code_frame(exchange, start, self._next_msg_id()), TYPE_CODE)
+        response = self._request_frame(lambda msg_id: build_code_frame(exchange, start, msg_id), TYPE_CODE)
         return parse_code_payload(exchange, response)
 
     def request_gbbq(self, code: str, *, include_raw: bool = False):
-        response = self._request(build_gbbq_frame(code, self._next_msg_id()), TYPE_GBBQ)
+        response = self._request_frame(lambda msg_id: build_gbbq_frame(code, msg_id), TYPE_GBBQ)
         return parse_gbbq_payload(response, include_raw=include_raw)
 
     def request_xdxr(self, code: str):
         return filter_xdxr_items(self.request_gbbq(code).items)
 
     def request_minute(self, code: str, *, include_raw: bool = False):
-        response = self._request(build_minute_frame(code, self._next_msg_id()), TYPE_MINUTE)
+        response = self._request_frame(lambda msg_id: build_minute_frame(code, msg_id), TYPE_MINUTE)
         return parse_minute_payload(response, include_raw=include_raw)
 
     def request_history_minute(self, code: str, trading_date, *, include_raw: bool = False):
-        response = self._request(build_history_minute_frame(code, trading_date, self._next_msg_id()), TYPE_HISTORY_MINUTE)
+        response = self._request_frame(lambda msg_id: build_history_minute_frame(code, trading_date, msg_id), TYPE_HISTORY_MINUTE)
         return parse_history_minute_payload(trading_date, response, include_raw=include_raw)
 
     def request_kline(self, period, code: str, start: int, count: int, *, kind: str = "stock", include_raw: bool = False):
-        response = self._request(build_kline_frame(period, code, start, count, self._next_msg_id()), TYPE_KLINE)
+        response = self._request_frame(lambda msg_id: build_kline_frame(period, code, start, count, msg_id), TYPE_KLINE)
         return parse_kline_payload(period, code, response, kind=kind, include_raw=include_raw)
 
     def request_trade(self, code: str, start: int, count: int, *, include_raw: bool = False):
-        response = self._request(build_trade_frame(code, start, count, self._next_msg_id()), TYPE_TRADE)
+        response = self._request_frame(lambda msg_id: build_trade_frame(code, start, count, msg_id), TYPE_TRADE)
         return parse_trade_payload(code, None, response, include_raw=include_raw)
 
     def request_history_trade(self, code: str, trading_date, start: int, count: int, *, include_raw: bool = False):
-        response = self._request(build_history_trade_frame(code, trading_date, start, count, self._next_msg_id()), TYPE_HISTORY_TRADE)
+        response = self._request_frame(lambda msg_id: build_history_trade_frame(code, trading_date, start, count, msg_id), TYPE_HISTORY_TRADE)
         return parse_history_trade_payload(code, trading_date, response, include_raw=include_raw)
 
     def request_history_trade_probe(self, code: str, trading_date, start: int, count: int):
-        response = self._request(build_history_trade_frame(code, trading_date, start, count, self._next_msg_id()), TYPE_HISTORY_TRADE)
+        response = self._request_frame(lambda msg_id: build_history_trade_frame(code, trading_date, start, count, msg_id), TYPE_HISTORY_TRADE)
         return parse_history_trade_probe_payload(code, trading_date, response)
 
     def request_call_auction(self, code: str, *, include_raw: bool = False):
-        response = self._request(build_call_auction_frame(code, self._next_msg_id()), TYPE_CALL_AUCTION)
+        response = self._request_frame(lambda msg_id: build_call_auction_frame(code, msg_id), TYPE_CALL_AUCTION)
         return parse_call_auction_payload(code, response, include_raw=include_raw)
 
     def request_quotes(self, codes: list[str]):
-        response = self._request(build_quote_frame(codes, self._next_msg_id()), TYPE_QUOTE)
+        response = self._request_frame(lambda msg_id: build_quote_frame(codes, msg_id), TYPE_QUOTE)
         return parse_quote_payload(codes, response)
+
+    def _request_frame(self, build_frame: Callable[[int], RequestFrame], expected_type: int) -> ResponseFrame:
+        with self._request_lock:
+            frame = build_frame(self._next_msg_id())
+            return self._request(frame, expected_type)
 
     def _request(self, frame, expected_type: int) -> ResponseFrame:
         self.connect()
@@ -157,21 +198,33 @@ class TdxConnection:
             return
         raise ConnectionClosedError("unable to connect to any host") from last_error
 
+    def _close_socket_locked(self) -> None:
+        if self._socket is not None:
+            try:
+                self._socket.close()
+            finally:
+                self._socket = None
+                self._connected_host = None
+
     def _send_frame(self, frame) -> None:
         if self._socket is None:
             raise ConnectionClosedError("connection is not open")
         self._socket.sendall(frame.to_bytes())
 
     def _send_heartbeat(self) -> None:
-        self._send_frame(build_heart_frame(self._next_msg_id()))
+        with self._request_lock:
+            self._send_frame(build_heart_frame(self._next_msg_id()))
 
-    def _mark_disconnected(self) -> None:
-        self.close()
+    def _mark_disconnected(self, generation: int | None = None) -> None:
+        self._close(generation)
 
-    def _is_connected(self) -> bool:
+    def _is_connected(self, generation: int | None = None) -> bool:
+        if generation is not None and generation != self._generation:
+            return False
         return self._socket is not None and not self._stop_event.is_set()
 
     def _next_msg_id(self) -> int:
-        value = self._msg_id
-        self._msg_id += 1
-        return value
+        with self._msg_id_lock:
+            value = self._msg_id
+            self._msg_id += 1
+            return value

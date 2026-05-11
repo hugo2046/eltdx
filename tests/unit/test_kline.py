@@ -6,7 +6,7 @@ from unittest.mock import Mock, call
 
 import pytest
 
-from eltdx import KlineItem, KlineResponse, TdxClient
+from eltdx import KlineItem, KlineResponse, TdxClient, to_jsonable
 from eltdx.exceptions import ProtocolError
 from eltdx.protocol.frame import ResponseFrame
 from eltdx.protocol.model_kline import parse_kline_payload
@@ -164,6 +164,34 @@ def test_get_kline_passes_explicit_kind_to_transport() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"start": -1}, "start must be >= 0"),
+        ({"count": 0}, "count must be > 0"),
+        ({"kind": "fund"}, "kind must be 'stock' or 'index'"),
+    ],
+)
+def test_get_kline_rejects_invalid_arguments_before_connecting(kwargs, message) -> None:
+    client = TdxClient()
+    client.connect = Mock()
+
+    with pytest.raises(ValueError, match=message):
+        client.get_kline("sz000001", "day", **kwargs)
+
+    client.connect.assert_not_called()
+
+
+def test_get_kline_all_rejects_invalid_kind_before_connecting() -> None:
+    client = TdxClient()
+    client.connect = Mock()
+
+    with pytest.raises(ValueError, match="kind must be 'stock' or 'index'"):
+        client.get_kline_all("sz000001", "day", kind="fund")
+
+    client.connect.assert_not_called()
+
+
 def test_get_kline_all_passes_explicit_kind_to_transport() -> None:
     client = TdxClient()
     client.connect = Mock()
@@ -176,3 +204,22 @@ def test_get_kline_all_passes_explicit_kind_to_transport() -> None:
 
     assert parsed.count == 1
     assert connection.request_kline.call_args_list == [call("day", "sh000001", 0, 800, kind="index")]
+
+
+def test_kline_response_is_jsonable_with_iso_times() -> None:
+    response = KlineResponse(
+        count=2,
+        items=[
+            _make_kline_item(5, 10500),
+            _make_kline_item(6, 10600, 10500),
+        ],
+    )
+
+    parsed = to_jsonable(response)
+
+    assert parsed["count"] == 2
+    assert [item["time"] for item in parsed["items"]] == [
+        "2026-03-05T15:00:00+08:00",
+        "2026-03-06T15:00:00+08:00",
+    ]
+    assert parsed["items"][1]["last_close_price_milli"] == 10500

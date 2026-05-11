@@ -33,6 +33,9 @@ cluster = TdxClient(
     pool_size=2,
     batch_size=80,
 )
+
+# 可选：按当前网络对候选服务器测速后再连接
+probed = TdxClient(probe_hosts=True)
 ```
 
 参数说明：
@@ -44,6 +47,11 @@ cluster = TdxClient(
 | `timeout` | `float` | `8.0` | 单个 socket 请求超时秒数 |
 | `pool_size` | `int` | `2` | 连接池大小；默认两条长连接 |
 | `batch_size` | `int` | `80` | `get_quote()` 自动分批上限，内部会限制在 `1~80` |
+| `probe_hosts` | `bool` | `False` | 是否在初始化时对候选服务器做一次 TCP 连接测速，并按延迟重排 |
+| `probe_timeout` | `float` | `1.2` | 单个服务器测速超时秒数，仅在 `probe_hosts=True` 时生效 |
+| `probe_workers` | `int` | `32` | 并发测速线程数，仅在 `probe_hosts=True` 时生效 |
+
+默认服务器列表来自包内 `tdx_server.json`，维护时已经按测速结果从快到慢排序。`pool_size > 1` 时，不同连接会从不同的快服务器开始尝试，避免所有连接都挤到同一台。传入 `host=` 或 `hosts=` 后会覆盖默认列表。
 
 连接模式：
 
@@ -371,7 +379,10 @@ with TdxClient() as client:
 
 - 推荐调用形式是 `get_kline(code, freq, ...)`。
 - 当前实现也兼容 `get_kline(freq, code, ...)`，用于兼容旧调用习惯。
+- `get_kline()` 返回单页结果，保持通达信服务端这一页的时间顺序，通常为从旧到新。
+- `get_kline_all()` 会自动翻页并返回整体时间升序结果，适合落库、画图和 MCP 输出。
 - 指数场景建议显式传 `kind="index"`，这样 `up_count` / `down_count` 等字段语义才更完整。
+- 如果需要 JSON / MCP 友好的输出，可以使用 `to_jsonable(response)`，时间会转成 ISO 字符串。
 
 `KlineResponse` 关键字段：
 
@@ -417,6 +428,25 @@ with TdxClient() as client:
 
 - `adjust` 支持 `qfq` / `hfq`
 - 这两个方法是计算型 helper，底层链路是：`gbbq -> xdxr -> factors -> adjusted_kline`
+
+### K 线转 JSON-friendly 结构
+
+```python
+from eltdx import TdxClient, to_jsonable
+
+with TdxClient() as client:
+    response = client.get_kline("sz000001", "day", count=10)
+    payload = to_jsonable(response)
+
+print(payload["items"][0]["time"])
+print(payload["items"][0]["close_price"])
+```
+
+说明：
+
+- `to_jsonable()` 不改变原始 dataclass，只返回可 JSON 序列化的 `dict` / `list` / 基础类型。
+- `datetime` / `date` 会转成 ISO 字符串，例如 `2026-05-11T15:00:00+08:00`。
+- `*_milli` 整数字段会保留，适合下游精确计算或落库。
 
 ## 8. 集合竞价
 
@@ -642,7 +672,104 @@ with TdxClient() as client:
 - 内部维护 `gbbq` 与 `factors` 的**内存缓存**。
 - 适合在同一代码上重复做复权和股本查询。
 
-## 12. 模型别名与延伸阅读
+## 12. MCP 原型
+
+当前提供一个最小 MCP server 原型，先暴露 K 线和行情快照两个工具，用于 Agent / MCP 客户端读取 A 股行情。
+
+安装：
+
+```bash
+python -m pip install "eltdx[mcp]"
+```
+
+启动：
+
+```bash
+eltdx-mcp
+```
+
+### `tdx_get_kline`
+
+读取一页 K 线，返回 JSON-friendly `dict`。
+
+| 参数 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `code` | `str` | 必填 | 证券代码，推荐完整代码，如 `sz000001` |
+| `period` | `str` | `day` | K 线周期，如 `1m`、`5m`、`day`、`week` |
+| `start` | `int` | `0` | 起始偏移 |
+| `count` | `int` | `200` | 读取条数，单页上限仍由底层 K 线接口限制 |
+| `kind` | `str` | `stock` | `stock` 或 `index` |
+| `adjust` | `str | None` | `None` | `None` / `none` / `qfq` / `hfq`；复权只支持股票 K 线 |
+| `include_raw` | `bool` | `False` | 是否返回原始 frame/payload 十六进制 |
+| `timeout` | `float` | `8.0` | socket 请求超时秒数 |
+| `probe_hosts` | `bool` | `False` | 是否启动时对候选服务器重新测速 |
+
+返回结构示意：
+
+```json
+{
+  "code": "sz000001",
+  "period": "day",
+  "kind": "stock",
+  "adjust": null,
+  "start": 0,
+  "request_count": 200,
+  "count": 1,
+  "items": [
+    {
+      "time": "2026-05-11T15:00:00+08:00",
+      "open_price": 11.2,
+      "open_price_milli": 11200,
+      "close_price": 11.28,
+      "close_price_milli": 11280
+    }
+  ],
+  "raw_frame_hex": null,
+  "raw_payload_hex": null
+}
+```
+
+说明：
+
+- MCP server 依赖是可选依赖，普通 SDK 使用不受影响。
+- 工具逻辑也可以在 Python 里直接调用：`from eltdx.mcp_tools import get_kline_data`。
+- 当前 MCP 原型只暴露 K 线和快照；后续可以按同样模式扩展分时、竞价等工具。
+
+### `tdx_get_quote`
+
+读取一只或多只证券的实时行情快照，返回 JSON-friendly `dict`。
+
+| 参数 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `codes` | `str` | 必填 | 单个代码或逗号分隔代码，例如 `sz000001,sh600000` |
+| `timeout` | `float` | `8.0` | socket 请求超时秒数 |
+| `pool_size` | `int` | `2` | 连接池大小，批量快照会在连接间分发 |
+| `probe_hosts` | `bool` | `False` | 是否启动时对候选服务器重新测速 |
+
+返回结构示意：
+
+```json
+{
+  "codes": ["sz000001", "sh600000"],
+  "request_count": 2,
+  "count": 2,
+  "quotes": [
+    {
+      "exchange": "sz",
+      "code": "000001",
+      "server_time": "2026-05-12T15:33:19.730000+08:00",
+      "last_price": 11.28,
+      "last_price_milli": 11280,
+      "last_close_price": 11.2,
+      "last_close_price_milli": 11200,
+      "buy_levels": [],
+      "sell_levels": []
+    }
+  ]
+}
+```
+
+## 13. 模型别名与延伸阅读
 
 当前还保留了几组兼容别名：
 

@@ -29,6 +29,7 @@ from .models import (
     TradeResponse,
     XdxrItem,
 )
+from .serialization import to_json, to_jsonable
 
 __all__ = [
     "__version__",
@@ -57,6 +58,8 @@ __all__ = [
     "QuoteLevel",
     "SecurityCode",
     "TdxClient",
+    "to_json",
+    "to_jsonable",
     "Trade",
     "TradeItem",
     "TradePage",
