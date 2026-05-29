@@ -25,7 +25,7 @@ with TdxClient(timeout=3) as client:
 | -------------- | --------------------------------------------------- | -------------------------- |
 | 握手、心跳          | `client.session`                                    | 连接后可自动握手，长连接默认后台心跳保活       |
 | 代码数量、代码表       | `client.codes`                                      | 查询沪、深、北市场数量和全量代码表          |
-| 批量快照           | `client.quotes.get_snapshots()` / `get_quote()`     | 查询现价、涨跌幅、成交量额、五档盘口等快照字段    |
+| 批量快照           | `client.quotes.get_snapshots()` / `get_quote()`     | 查询现价、涨跌幅、成交量额和盘口；`get_quote()` 补齐五档盘口 |
 | 分类行情           | `client.quotes.list_by_category()`                  | 按市场、板块和排序字段分页查询行情列表        |
 | 增量刷新 / 推送队列    | `client.quotes.refresh()` / `poll_push()`           | 支持关注代码刷新和未配对推送帧读取          |
 | K 线 / 周期线      | `client.bars.get()` / `get_kline()`                 | 支持分钟、日、周、月、季、年线和服务端复权参数    |
@@ -161,7 +161,7 @@ pip install eltdx
 源码开发：
 
 ```bash
-pip install -e .[dev]
+pip install -e ".[dev]"
 python -m pytest
 ```
 

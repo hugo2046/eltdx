@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "eltdx"
-version = "1.0.0"
+version = "1.0.1"
 description = "通达信 7709 行情与 7615 F10 资料 Python 客户端"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -24,9 +24,7 @@ classifiers = [
   "Topic :: Office/Business :: Financial :: Investment",
   "Typing :: Typed",
 ]
-dependencies = [
-  "mcp>=1.0",
-]
+dependencies = []
 
 [project.urls]
 Documentation = "https://github.com/electkismet/eltdx/tree/main/docs"
@@ -37,6 +35,9 @@ Issues = "https://github.com/electkismet/eltdx/issues"
 dev = [
   "build>=1.2",
   "pytest>=8.0",
+]
+mcp = [
+  "mcp>=1.0",
 ]
 
 [project.scripts]

@@ -71,13 +71,17 @@ def smoke_codes(client: TdxClient) -> None:
 
 
 def smoke_quotes(client: TdxClient, quote_count: int) -> None:
-    codes = [item.full_code for item in client.get_codes("sz", limit=quote_count)]
+    candidates = ["sz000001", "sh600000"]
+    if quote_count > len(candidates):
+        candidates.extend(client.get_a_share_codes_all())
+    codes = list(dict.fromkeys(candidates))[:quote_count]
     assert_true(codes, "no quote test codes")
     quotes = client.get_quote(codes)
     assert_true(len(quotes) == len(codes), f"quote count mismatch: {len(quotes)} != {len(codes)}")
     first = quotes[0]
     assert_true(first.full_code == codes[0], "first quote code mismatch")
     assert_true(len(first.buy_levels) == 5 and len(first.sell_levels) == 5, "quote levels should be 5x5")
+    assert_true(first.last_price > 0, "first quote should be an active stock with a positive price")
     ok(f"quotes count={len(quotes)} first={first.full_code} price={first.last_price}")
 
 

@@ -7,13 +7,14 @@
 安装后运行：
 
 ```bash
+pip install "eltdx[mcp]"
 eltdx-mcp
 ```
 
 也可以在源码目录运行：
 
 ```bash
-pip install -e .
+pip install -e ".[mcp]"
 eltdx-mcp
 ```
 

@@ -217,7 +217,10 @@ def _parse_snapshot_record(record: bytes, expected_code: str | None) -> QuoteSna
     current_milli = prices["current"]
     buy_levels: list[QuoteLevel] = []
     sell_levels: list[QuoteLevel] = []
-    for _ in range(5):
+    # Live 0x054c responses only expose a stable bid1/ask1 group at this
+    # position. Bytes after the first level are an extension area on current
+    # servers; parsing them as levels 2-5 produces invalid prices/volumes.
+    for _ in range(1):
         bid_delta, offset = consume_price(record, offset)
         ask_delta, offset = consume_price(record, offset)
         bid_vol, offset = consume_varint(record, offset)

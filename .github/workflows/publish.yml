@@ -72,7 +72,10 @@ jobs:
           import os
 
           tag = os.environ["GITHUB_REF_NAME"]
-          if tag == "v1.0.0":
+          release_notes = Path("docs/releases") / f"{tag}.md"
+          if release_notes.exists():
+            notes = release_notes.read_text(encoding="utf-8")
+          elif tag == "v1.0.0":
             notes = Path("docs/UPDATE_FROM_0_5_1.md").read_text(encoding="utf-8")
           else:
             notes = f"# {tag}\n\n请参考仓库文档和提交记录查看本次更新。\n"

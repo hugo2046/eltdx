@@ -34,11 +34,22 @@
 pip install eltdx
 ```
 
+如果需要启动 MCP stdio 工具服务，安装可选依赖：
+
+```bash
+pip install "eltdx[mcp]"
+```
+
 源码目录安装：
 
 ```bash
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -U pip
 pip install -e .
 ```
+
+源码开发时建议始终先安装到当前虚拟环境；否则本机如果已有旧版 `eltdx`，`python -m eltdx...` 可能导入 site-packages 里的旧包。
 
 安装后可以先看命令帮助：
 
@@ -110,7 +121,8 @@ print(f10.company_profile("000034").rows[0])
 | 心跳           | `client.session.heartbeat()`                               | [`0x0004`](docs/COMMANDS_7709.md#cmd-0x0004)                                                | 返回服务端心跳响应；长连接默认后台 30 秒保活，也可手动调用                                | [文档](docs/methods/7709-心跳.md)         |
 | 代码数量         | `client.codes.count("sz")` / `get_count()`                 | [`0x044e`](docs/COMMANDS_7709.md#cmd-0x044e)                                                | 返回沪、深、北某个市场的证券数量；常用于全量拉代码表前确定规模                                | [文档](docs/methods/7709-代码数量.md)       |
 | 代码表          | `client.codes.list()` / `get_codes_all()`                  | [`0x044d`](docs/COMMANDS_7709.md#cmd-0x044d)                                                | 返回代码、名称、市场、价格精度、昨收、A 股 / ETF / 指数等本地分类                         | [文档](docs/methods/7709-代码表.md)        |
-| 批量快照         | `client.quotes.get_snapshots()` / `get_quote()`            | [`0x054c`](docs/COMMANDS_7709.md#cmd-0x054c)                                                | 按代码列表返回现价、涨跌幅、成交量额、内外盘、五档盘口等行情快照                               | [文档](docs/methods/7709-批量快照.md)       |
+| 批量快照         | `client.quotes.get_snapshots()` / `get_quote()`            | [`0x054c`](docs/COMMANDS_7709.md#cmd-0x054c) + [`0x0547`](docs/COMMANDS_7709.md#cmd-0x0547) | 按代码列表返回现价、涨跌幅、成交量额、内外盘和盘口；`get_quote()` 补齐五档盘口                   | [文档](docs/methods/7709-批量快照.md)       |
+| 五档盘口         | `client.get_quote_depth()` / `client.quotes.get_depth()`   | [`0x0547`](docs/COMMANDS_7709.md#cmd-0x0547)                                                | 用刷新接口按代码列表直接返回买一到买五 / 卖一到卖五                                         | [文档](docs/methods/7709-增量刷新推送队列.md) |
 | 分类行情         | `client.quotes.list_by_category()`                         | [`0x054b`](docs/COMMANDS_7709.md#cmd-0x054b)                                                | 按市场或板块分页返回行情列表；可按涨幅、价格、成交额等服务端排序                               | [文档](docs/methods/7709-分类行情.md)       |
 | 增量刷新 / 推送队列  | `client.quotes.refresh()` / `poll_push()`                  | [`0x0547`](docs/COMMANDS_7709.md#cmd-0x0547)                                                | 返回关注代码的增量行情；未配对推送帧进入 push queue 供调用方读取                         | [文档](docs/methods/7709-增量刷新推送队列.md)   |
 | K 线 / 周期线    | `client.bars.get()` / `get_kline()`                        | [`0x052d`](docs/COMMANDS_7709.md#cmd-0x052d)                                                | 返回 OHLC、成交量额、前收等 K 线；支持 1/5/15/30/60 分钟、日、周、月、季、年线和服务端复权/不复权参数 | [文档](docs/methods/7709-K线周期线.md)      |

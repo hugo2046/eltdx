@@ -63,10 +63,18 @@ TdxClient(heartbeat_interval=None)
 
 ### `get_quote(codes)`
 
-批量查询行情快照，自动按 80 个代码拆批，对应 `client.quotes.get_snapshots()`。
+批量查询行情快照，自动按 80 个代码拆批。底层先取 `client.quotes.get_snapshots()`，再用 `0x0547` 首次刷新补齐五档盘口。
 
 ```python
 client.get_quote(["sz000001", "sh600000"])
+```
+
+### `get_quote_depth(codes)`
+
+按代码列表直接查询五档盘口，对应 `client.quotes.get_depth()` / `0x0547` 首次刷新。
+
+```python
+client.get_quote_depth(["sz000001", "sh600000"])
 ```
 
 ### 代码表便捷方法
@@ -279,7 +287,7 @@ client.codes.all("bj")
 
 ### `get_snapshots(codes)`
 
-按显式代码列表查询批量行情快照，对应 `0x054c`。
+按显式代码列表查询批量行情快照，对应 `0x054c`。当前实盘响应只稳定确认买一 / 卖一；需要完整五档时用 `client.get_quote()`。
 
 ```python
 client.quotes.get_snapshots(["sz000001", "sh600000"])
@@ -308,6 +316,14 @@ client.quotes.refresh(["sz000001"], cursors={"sz000001": 0})
 ```
 
 `refresh()` 发起一次增量刷新请求。服务端主动推送帧会进入 transport 的 push queue，可用下面两个方法读取。
+
+### `get_depth(codes)`
+
+按代码列表直接发起一次 `0x0547` 首次刷新，返回 `QuoteRefreshPage`，适合只关心买一到买五 / 卖一到卖五的场景。
+
+```python
+client.quotes.get_depth(["sz000001", "sh600000"])
+```
 
 ### `poll_push(timeout=0.0, parse=False)`
 

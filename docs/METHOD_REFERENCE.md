@@ -210,7 +210,7 @@ client.get_a_share_count("sz")
 
 ### `client.quotes.get_snapshots(codes)` / `client.get_quote(codes)`
 
-按显式代码列表查询行情快照，对应 `0x054c`。
+按显式代码列表查询行情快照。`client.quotes.get_snapshots()` 直接对应 `0x054c`，当前实盘只稳定确认买一 / 卖一；`client.get_quote()` 会额外用 `0x0547` 首次刷新补齐五档盘口。
 
 ```python
 quotes = client.quotes.get_snapshots(["sz000001", "sh600000"])
@@ -238,7 +238,7 @@ quote = client.get_quote("sz000001")[0]
 | `amount`                                  | 成交额           |
 | `inside_dish` / `outer_disc`              | 内盘 / 外盘       |
 | `open_amount_yuan`                        | 开盘金额，单位元      |
-| `buy_levels` / `sell_levels`              | 买一到买五 / 卖一到卖五 |
+| `buy_levels` / `sell_levels`              | `get_snapshots()` 为已确认一档；`get_quote()` 补齐买一到买五 / 卖一到卖五 |
 | `tail_raw`                                | 尾部扩展原始字段      |
 
 | 派生字段           | 计算方式                             |
@@ -255,6 +255,19 @@ quote = client.get_quote("sz000001")[0]
 | `price`           | 档位价格      |
 | `volume`          | 档位委托量     |
 | `price_delta_raw` | 协议价格差分原始值 |
+
+### `client.quotes.get_depth(codes)` / `client.get_quote_depth(codes)`
+
+按代码列表直接查询五档盘口，对应 `0x0547` 首次刷新。这个入口不经过 `0x054c` 快照，适合只关心买一到买五 / 卖一到卖五的场景。
+
+```python
+depth = client.quotes.get_depth(["sz000001", "sh600000"])
+depth = client.get_quote_depth("sz000001")
+```
+
+| 返回模型               | 说明             |
+| ------------------ | -------------- |
+| `QuoteRefreshPage` | 本次刷新返回的五档行情记录 |
 
 <a id="method-quotes-category"></a>
 

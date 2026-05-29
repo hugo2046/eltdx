@@ -10,10 +10,11 @@ from eltdx.protocol.constants import TYPE_REFRESH_STREAM
 from eltdx.protocol.frame import ResponseFrame
 from eltdx.protocol import COMMANDS, decode, encode, required_commands
 from eltdx.transport import PooledSocketTransport, SocketTransport
+from eltdx.models import QuoteLevel, QuoteRefreshPage, QuoteRefreshRecord, QuoteSnapshot
 
 
 def test_version_is_defined() -> None:
-    assert __version__ == "1.0.0"
+    assert __version__ == "1.0.1"
 
 
 def test_packaged_server_hosts_load_from_json() -> None:
@@ -49,6 +50,7 @@ def test_command_registry_contains_7709_documents() -> None:
 def test_business_api_uses_command_numbers() -> None:
     client = TdxClient.in_memory()
     assert client.quotes.get_snapshots(["sz000001"])["command"] == "0x054c"
+    assert client.quotes.get_depth(["sz000001"])["command"] == "0x0547"
     assert client.quotes.list_by_category("沪深A股", sort_by="涨幅")["command"] == "0x054b"
     assert client.quotes.poll_push() is None
     assert client.quotes.drain_pushes() == []
@@ -102,6 +104,116 @@ def test_compat_get_quote_batches_requests() -> None:
         "quote:sz000002",
     ]
     assert [payload["codes"] for payload in transport.payloads] == [["sz000001", "sh600000"], ["sz000002"]]
+
+
+def test_compat_get_quote_merges_refresh_depth() -> None:
+    top_bid = QuoteLevel(price=10.92, volume=1232, price_delta_raw=-1)
+    top_ask = QuoteLevel(price=10.93, volume=12481, price_delta_raw=0)
+    full_bids = tuple(QuoteLevel(price=10.92 - index * 0.01, volume=100 + index, price_delta_raw=-(index + 1)) for index in range(5))
+    full_asks = tuple(QuoteLevel(price=10.93 + index * 0.01, volume=200 + index, price_delta_raw=index) for index in range(5))
+
+    snapshot = QuoteSnapshot(
+        exchange="sz",
+        market_id=0,
+        code="000001",
+        active1=1,
+        last_price=10.93,
+        pre_close_price=10.66,
+        open_price=10.65,
+        high_price=10.93,
+        low_price=10.62,
+        time_raw=0,
+        unknown_after_time_raw=0,
+        total_hand=1,
+        current_hand=1,
+        amount=1.0,
+        amount_raw=0,
+        inside_dish=0,
+        outer_disc=0,
+        unknown_after_outer_raw=0,
+        open_amount_raw=79864,
+        open_amount_yuan=7_986_400.0,
+        buy_levels=(top_bid,),
+        sell_levels=(top_ask,),
+        tail_raw=b"",
+    )
+    refresh_record = QuoteRefreshRecord(
+        exchange="sz",
+        market_id=0,
+        code="000001",
+        active=1,
+        update_time_raw=153306,
+        last_price=10.93,
+        last_close_price=10.66,
+        open_price=10.65,
+        high_price=10.93,
+        low_price=10.62,
+        status_or_reserved_raw=0,
+        total_hand=1,
+        current_hand=1,
+        amount=1.0,
+        amount_raw=0,
+        inside_dish=0,
+        outer_disc=0,
+        unknown_after_outer_raw=0,
+        open_amount_raw=798643,
+        open_amount_yuan=7_986_430.0,
+        buy_levels=full_bids,
+        sell_levels=full_asks,
+        tail_raw=b"",
+    )
+
+    class FakeTransport:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def connect(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+        def request(self, command: str) -> str:
+            return "pong"
+
+        def execute(self, command: int, payload=None):
+            self.calls.append((command, payload))
+            if command == 0x054C:
+                return [snapshot]
+            if command == TYPE_REFRESH_STREAM:
+                return QuoteRefreshPage(("sz000001",), (refresh_record,), decoded_payload=b"")
+            raise AssertionError(command)
+
+    transport = FakeTransport()
+    quote = TdxClient(transport=transport).get_quote("sz000001")[0]
+
+    assert [command for command, _ in transport.calls] == [0x054C, TYPE_REFRESH_STREAM]
+    assert quote.buy_levels == full_bids
+    assert quote.sell_levels == full_asks
+    assert quote.open_amount_raw == 798643
+
+
+def test_get_quote_depth_uses_refresh_interface() -> None:
+    class FakeTransport:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def connect(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+        def request(self, command: str) -> str:
+            return "pong"
+
+        def execute(self, command: int, payload=None):
+            self.calls.append((command, payload))
+            return "depth"
+
+    transport = FakeTransport()
+    assert TdxClient(transport=transport).get_quote_depth(["sz000001"]) == "depth"
+    assert transport.calls == [(TYPE_REFRESH_STREAM, {"codes": ["sz000001"], "cursors": {}})]
 
 
 def test_compat_code_filters_use_security_categories() -> None:

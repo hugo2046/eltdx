@@ -25,7 +25,7 @@ from .equity import (
 )
 from .f10 import F10Client
 from .helpers import HelperApi
-from .models import Auction0925Result, SecurityCode
+from .models import Auction0925Result, QuoteRefreshRecord, QuoteSnapshot, SecurityCode
 from .hosts import DEFAULT_PROBE_TIMEOUT, DEFAULT_PROBE_WORKERS
 from .protocol.commands.klines import normalize_period
 from .protocol.constants import DEFAULT_CODE_PAGE_SIZE
@@ -177,7 +177,11 @@ class TdxClient:
         self._finance_cache.clear()
 
     def get_quote(self, codes: str | Sequence[str]):
-        """兼容旧版：按代码列表批量查询行情快照，自动按 80 个一批拆分。"""
+        """兼容旧版：按代码列表批量查询行情快照，自动按 80 个一批拆分。
+
+        ``0x054c`` 当前实盘响应只稳定包含一档盘口；这里用首次
+        ``0x0547`` 刷新补齐买一到买五，避免返回伪造的深度档位。
+        """
 
         code_list = _as_code_list(codes)
         if not code_list:
@@ -187,12 +191,56 @@ class TdxClient:
         for batch in _chunks(code_list, self.batch_size):
             page = self.quotes.get_snapshots(batch)
             if isinstance(page, list):
-                results.extend(page)
+                results.extend(self._merge_quote_depths(page, batch))
             elif isinstance(page, tuple):
-                results.extend(page)
+                results.extend(self._merge_quote_depths(list(page), batch))
             else:
                 return page
         return results
+
+    def get_quote_depth(self, codes: str | Sequence[str]):
+        """按代码列表查询五档盘口，直接使用 0x0547 首次刷新接口。"""
+
+        return self.quotes.get_depth(codes)
+
+    def _merge_quote_depths(self, snapshots: list[Any], codes: Sequence[str]) -> list[Any]:
+        if not snapshots or not all(isinstance(item, QuoteSnapshot) for item in snapshots):
+            return snapshots
+
+        try:
+            refresh = self.quotes.get_depth(codes)
+        except Exception:
+            return snapshots
+
+        records = getattr(refresh, "records", ())
+        if not records:
+            return snapshots
+        depth_by_code = {
+            record.full_code: record
+            for record in records
+            if isinstance(record, QuoteRefreshRecord)
+            and len(record.buy_levels) >= 5
+            and len(record.sell_levels) >= 5
+        }
+        if not depth_by_code:
+            return snapshots
+
+        merged: list[Any] = []
+        for snapshot in snapshots:
+            depth = depth_by_code.get(snapshot.full_code)
+            if depth is None:
+                merged.append(snapshot)
+                continue
+            merged.append(
+                replace(
+                    snapshot,
+                    buy_levels=depth.buy_levels,
+                    sell_levels=depth.sell_levels,
+                    open_amount_raw=depth.open_amount_raw,
+                    open_amount_yuan=depth.open_amount_yuan,
+                )
+            )
+        return merged
 
     def get_count(self, exchange, *, refresh: bool = False) -> int:
         """兼容旧版：查询某市场代码数量。"""

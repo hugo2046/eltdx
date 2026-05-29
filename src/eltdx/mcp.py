@@ -118,7 +118,7 @@ def create_mcp_server():
     try:
         from mcp.server.fastmcp import FastMCP
     except ImportError as exc:  # pragma: no cover - depends on optional package install
-        raise RuntimeError("MCP support requires the 'mcp' package. Install eltdx with its dependencies.") from exc
+        raise RuntimeError("MCP support requires the optional 'mcp' extra. Install with: pip install 'eltdx[mcp]'") from exc
 
     server = FastMCP("eltdx", instructions="eltdx A-share quote, K-line, F10 and topic data tools.")
     server.tool(name="eltdx_quote")(quote)

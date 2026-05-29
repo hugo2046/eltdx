@@ -336,6 +336,28 @@ def test_parse_refresh_stream_empty_payload() -> None:
     assert refresh.decoded_payload == b"\x00\x00"
 
 
+def test_parse_snapshot_keeps_only_confirmed_top_level_depth() -> None:
+    record = bytes.fromhex(
+        "00303030303031e61185115b5c005fa4a3cf0ec51187e9aa01bfe40e40afb44eb0994298cf6800"
+        "b8df094100901381c3011614120010004091fc4c000000000000000000000000ca0b9f409ffa84c200"
+        "00000000000000000000000000000000000000000000e611"
+    )
+    payload = b"\x00\x00\x01\x00" + record
+    snapshot = parse_command_response(
+        TYPE_SNAPSHOTS,
+        ResponseFrame(0, 1, TYPE_SNAPSHOTS, len(payload), len(payload), payload, b""),
+        {"codes": ["sz000001"]},
+    )[0]
+
+    assert len(snapshot.buy_levels) == 1
+    assert len(snapshot.sell_levels) == 1
+    assert snapshot.buy_levels[0].price == pytest.approx(10.92)
+    assert snapshot.buy_levels[0].volume == 1232
+    assert snapshot.sell_levels[0].price == pytest.approx(10.93)
+    assert snapshot.sell_levels[0].volume == 12481
+    assert snapshot.tail_raw.startswith(bytes.fromhex("1614120010004091fc4c"))
+
+
 def test_parse_corporate_finance_and_limits_payloads() -> None:
     capital_record = (
         bytes([0])

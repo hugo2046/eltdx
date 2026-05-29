@@ -15,6 +15,11 @@ class QuoteApi(ApiBase):
         code_list = [codes] if isinstance(codes, str) else list(codes)
         return self._execute("snapshots", codes=code_list)
 
+    def get_depth(self, codes: str | Sequence[str]):
+        """Query five-level quote depth via the 0x0547 refresh interface."""
+
+        return self.refresh(codes, cursors={})
+
     def list_by_category(
         self,
         category: str | int,
