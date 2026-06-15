@@ -24,7 +24,7 @@
 | 公司基础   | 股本变迁、除权除息、财务基础信息、特殊品种涨跌停限制                  | `client.corporate`、`client.limits` |
 | F10 资料 | 公司概况、热点题材、公告、新闻、研报、财务报表、估值、主营构成             | `client.f10` 或 `F10Client`         |
 | 常用场景   | 股票信息汇总、个股概念板块、概念板块成分股、竞价数据、批量行情表、复权/不复权 K 线 | `client.helpers`                   |
-| 工具能力   | 连接池、主站测速、自动心跳、低频数据缓存、JSON 序列化、交易日工具、MCP 工具服务 | `TdxClient`、`WorkdayService`、`eltdx-mcp` |
+| 工具能力   | 连接池、主站测速、自动心跳、低频数据缓存、JSON 序列化、交易日工具、MCP 工具服务（stdio / HTTP 鉴权） | `TdxClient`、`WorkdayService`、`eltdx-mcp`、`eltdx-mcp-http` |
 
 调用方法和返回字段看 [METHOD_REFERENCE.md](docs/METHOD_REFERENCE.md)，常用问题入口看 [docs/helpers/README.md](docs/helpers/README.md)，完整 API 看 [API_REFERENCE.md](docs/API_REFERENCE.md)，字段总表看 [FIELD_REFERENCE.md](docs/FIELD_REFERENCE.md)，F10 资料看 [F10_7615.md](docs/F10_7615.md)，MCP 工具看 [MCP.md](docs/MCP.md)。
 
@@ -34,7 +34,7 @@
 pip install eltdx
 ```
 
-如果需要启动 MCP stdio 工具服务，安装可选依赖：
+如果需要启动 MCP 工具服务（stdio 或 HTTP），安装可选依赖：
 
 ```bash
 pip install "eltdx[mcp]"
@@ -63,6 +63,15 @@ MCP 工具服务启动后会占用当前终端作为 stdio 服务：
 ```bash
 eltdx-mcp
 ```
+
+远程使用走 HTTP，并通过静态 token 鉴权（未配置 `ELTDX_MCP_TOKENS` 会拒绝启动）：
+
+```bash
+export ELTDX_MCP_TOKENS='{"<给朋友的随机串>":"alice"}'
+eltdx-mcp-http        # 默认 127.0.0.1:8000
+```
+
+HTTP 鉴权、访问日志、SSRF/代理等安全配置看 [docs/MCP.md](docs/MCP.md)。
 
 源码开发自测：
 
