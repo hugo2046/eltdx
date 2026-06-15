@@ -54,7 +54,7 @@ export ELTDX_MCP_TOKENS='{"<给alice的随机串>":"alice","<给bob的随机串>
 export ELTDX_MCP_TOKENS='{"<token>":{"client_id":"alice","scopes":["read"]}}'
 ```
 
-不配置 `ELTDX_MCP_TOKENS` 时不启用鉴权（适合本地 stdio）。客户端连接时需带 `Authorization: Bearer <token>`。
+客户端连接时需带 `Authorization: Bearer <token>`。stdio（`eltdx-mcp`）未配置 token 时免鉴权，方便本地使用；**HTTP 入口强制要求 token，未配置 `ELTDX_MCP_TOKENS` 会直接拒绝启动**，避免裸奔。
 
 ### 启动
 
@@ -70,7 +70,9 @@ uvicorn eltdx.mcp:create_app --factory --host 0.0.0.0 --port 8000
 
 | 环境变量 | 说明 | 默认值 |
 | --- | --- | --- |
-| `ELTDX_MCP_TOKENS` | 静态 token 配置（JSON），未设置则不鉴权 | 无 |
+| `ELTDX_MCP_TOKENS` | 静态 token 配置（JSON）；HTTP 入口必填，未配置则拒绝启动 | 无 |
+| `ELTDX_MCP_ALLOWED_HOSTS` | 允许调用方自定义的 7709 主站白名单（逗号分隔）；HTTP 下未配置则禁止任何自定义 `host`，回退服务器默认主站 | 无 |
+| `ELTDX_MCP_TRUST_PROXY` | 置为 `1`/`true` 时信任 `X-Forwarded-For`（仅当部署在可信反向代理后） | 关闭 |
 | `ELTDX_MCP_HOST` | `eltdx-mcp-http` 监听地址 | `127.0.0.1` |
 | `ELTDX_MCP_PORT` | `eltdx-mcp-http` 监听端口 | `8000` |
 | `ELTDX_MCP_LOG` | JSONL 访问日志路径 | `logs/mcp_access.jsonl` |
@@ -80,12 +82,15 @@ uvicorn eltdx.mcp:create_app --factory --host 0.0.0.0 --port 8000
 每次工具调用写一行 JSON，便于做安全统计（`pd.read_json(path, lines=True)`）：
 
 ```json
-{"time": "2026-06-15T16:17:23+08:00", "tool": "eltdx_quote", "client_id": "alice", "ip": "203.0.113.5", "status": "ok"}
+{"time": "2026-06-15T16:17:23+08:00", "tool": "eltdx_quote", "client_id": "alice", "peer_ip": "203.0.113.5", "ip": "203.0.113.5", "status": "ok"}
 ```
 
-`ip` 在反向代理后会优先取 `X-Forwarded-For` 的首个地址。
+`peer_ip` 始终是 socket 真实对端地址；`ip` 仅在 `ELTDX_MCP_TRUST_PROXY` 开启时才采信 `X-Forwarded-For` 首段，否则等于 `peer_ip`。存在转发头时还会记录原始 `forwarded_for` 供审计。
 
-> ⚠️ 部署务必置于 HTTPS 之后：静态 token 是明文 Bearer，HTTP 明文传输会被中间人截获。
+> ⚠️ 安全提醒：
+> - 部署务必置于 **HTTPS** 之后——静态 token 是明文 Bearer，HTTP 明文传输会被中间人截获。
+> - `host` 参数经 HTTP 暴露存在 SSRF 风险，默认已禁止调用方自定义；确需放开时用 `ELTDX_MCP_ALLOWED_HOSTS` 白名单按主站精确放行。
+> - 只有部署在可信代理（如自管 nginx）后才开 `ELTDX_MCP_TRUST_PROXY`，否则 `X-Forwarded-For` 可被客户端伪造。
 
 ## 工具列表
 
