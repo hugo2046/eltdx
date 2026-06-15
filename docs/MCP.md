@@ -1,6 +1,9 @@
 # MCP 工具
 
-`eltdx` 提供一个 MCP stdio 服务，方便在支持 MCP 的客户端里直接调用行情、K 线、F10 和题材相关工具。
+`eltdx` 提供 MCP 服务，方便在支持 MCP 的客户端里直接调用行情、K 线、F10 和题材相关工具。支持两种运行方式：
+
+- **stdio**（`eltdx-mcp`）：本地使用，默认不鉴权。
+- **HTTP**（`eltdx-mcp-http` / FastAPI 部署）：远程使用，支持静态 token 鉴权，并按 JSONL 记录每次调用的 `client_id` 与来源 IP。
 
 ## 启动
 
@@ -33,7 +36,56 @@ bash：
 PYTHONPATH=src python -m eltdx.mcp
 ```
 
-MCP 服务默认走 stdio，不额外开启 HTTP 端口。
+`eltdx-mcp` 默认走 stdio，不开启 HTTP 端口；远程访问见下一节。
+
+## HTTP 服务与鉴权
+
+远程提供服务时使用 HTTP（Streamable HTTP）传输，并通过静态 token 鉴权。
+
+### 配置 token
+
+token 通过环境变量 `ELTDX_MCP_TOKENS` 配置，取值为 JSON 对象，**不要写进代码或提交到仓库**。键是 token 字符串，值是 `client_id` 简写或完整 claims：
+
+```bash
+# 简写：值即 client_id
+export ELTDX_MCP_TOKENS='{"<给alice的随机串>":"alice","<给bob的随机串>":"bob"}'
+
+# 完整写法：自定义 scopes
+export ELTDX_MCP_TOKENS='{"<token>":{"client_id":"alice","scopes":["read"]}}'
+```
+
+不配置 `ELTDX_MCP_TOKENS` 时不启用鉴权（适合本地 stdio）。客户端连接时需带 `Authorization: Bearer <token>`。
+
+### 启动
+
+```bash
+# FastMCP 内置服务器，适合开发 / 简单部署
+eltdx-mcp-http                       # 默认监听 127.0.0.1:8000
+
+# FastAPI + uvicorn，适合正式部署
+uvicorn eltdx.mcp:create_app --factory --host 0.0.0.0 --port 8000
+```
+
+`uvicorn` 方式下 MCP 端点挂在 `/mcp` 路径。
+
+| 环境变量 | 说明 | 默认值 |
+| --- | --- | --- |
+| `ELTDX_MCP_TOKENS` | 静态 token 配置（JSON），未设置则不鉴权 | 无 |
+| `ELTDX_MCP_HOST` | `eltdx-mcp-http` 监听地址 | `127.0.0.1` |
+| `ELTDX_MCP_PORT` | `eltdx-mcp-http` 监听端口 | `8000` |
+| `ELTDX_MCP_LOG` | JSONL 访问日志路径 | `logs/mcp_access.jsonl` |
+
+### 访问日志
+
+每次工具调用写一行 JSON，便于做安全统计（`pd.read_json(path, lines=True)`）：
+
+```json
+{"time": "2026-06-15T16:17:23+08:00", "tool": "eltdx_quote", "client_id": "alice", "ip": "203.0.113.5", "status": "ok"}
+```
+
+`ip` 在反向代理后会优先取 `X-Forwarded-For` 的首个地址。
+
+> ⚠️ 部署务必置于 HTTPS 之后：静态 token 是明文 Bearer，HTTP 明文传输会被中间人截获。
 
 ## 工具列表
 
