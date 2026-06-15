@@ -15,3 +15,5 @@ dist/
 
 artifacts/
 output/
+logs/
+.codegraph/
