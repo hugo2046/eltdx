@@ -27,6 +27,10 @@ DEFAULT_LOG_PATH = "logs/mcp_access.jsonl"
 # 防止 create_mcp_server 多次调用时重复挂载 JSONL sink。
 _ACCESS_SINK_ID: int | None = None
 
+# HTTP 入口启用后置 True：限制工具调用者自定义 host，避免 SSRF。
+# stdio 本地使用保持 False（调用者即本机用户，无信任边界）。
+_HOST_RESTRICTED: bool = False
+
 
 def quote(codes: str | Sequence[str], *, timeout: float = 8.0, host: str | None = None) -> Any:
     """Query quote snapshots."""
@@ -155,18 +159,50 @@ def _load_tokens() -> dict[str, dict[str, Any]]:
     return tokens
 
 
-def _client_ip(request) -> str:
-    """从请求中解析来源 IP，部署在反向代理后时优先取 ``X-Forwarded-For``。
+def _check_host(host: str | None) -> str | None:
+    """校验工具调用者传入的 ``host``，防止经 HTTP 暴露后被用于 SSRF。
 
-    :param request: Starlette ``Request`` 对象。
-    :returns: 调用者 IP 字符串，无法判定时返回 ``"unknown"``。
+    stdio 本地使用（``_HOST_RESTRICTED`` 为 False）时调用者即本机用户，直接放行。
+    HTTP 暴露时仅放行 ``ELTDX_MCP_ALLOWED_HOSTS``（逗号分隔）白名单内的主站；
+    未配置白名单则拒绝任何自定义 host，回退服务器默认主站列表。
+
+    :param host: 调用方请求的 7709 主站，``None`` 表示用服务器默认。
+    :returns: 校验通过的 host（或 ``None``）。
+    :raises ValueError: HTTP 下传入了不在白名单内的 host。
     """
 
+    if host is None or not _HOST_RESTRICTED:
+        return host
+    allowed = {h.strip() for h in os.environ.get("ELTDX_MCP_ALLOWED_HOSTS", "").split(",") if h.strip()}
+    if host not in allowed:
+        raise ValueError(f"host {host!r} 不在 ELTDX_MCP_ALLOWED_HOSTS 白名单内")
+    return host
+
+
+def _trust_proxy() -> bool:
+    """是否信任 ``X-Forwarded-For``（仅当部署在可信反向代理之后才应开启）。"""
+
+    return os.environ.get("ELTDX_MCP_TRUST_PROXY", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _resolve_ips(request) -> dict[str, str]:
+    """解析来源 IP，区分 socket 真实对端与可伪造的转发头。
+
+    默认记录 socket ``peer_ip``；仅当 ``ELTDX_MCP_TRUST_PROXY`` 开启时才用
+    ``X-Forwarded-For`` 首段作为 ``ip``。原始转发头始终留痕以便审计。
+
+    :param request: Starlette ``Request`` 对象。
+    :returns: 含 ``peer_ip`` / ``ip`` 及（存在时）``forwarded_for`` 的字段字典。
+    """
+
+    peer_ip = request.client.host if request.client else "unknown"
     forwarded = request.headers.get("x-forwarded-for")
+    fields = {"peer_ip": peer_ip}
     if forwarded:
-        # X-Forwarded-For 是 "client, proxy1, proxy2"，第一个才是真实客户端。
-        return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+        fields["forwarded_for"] = forwarded  # 原始头留痕，不可信但可审计
+    # X-Forwarded-For 是 "client, proxy1, proxy2"，仅在可信代理后首段才是真实客户端。
+    fields["ip"] = forwarded.split(",")[0].strip() if (forwarded and _trust_proxy()) else peer_ip
+    return fields
 
 
 def _configure_access_log():
@@ -207,11 +243,11 @@ def _build_access_middleware():
         async def on_call_tool(self, context: MiddlewareContext, call_next):
             token = get_access_token()
             client_id = token.client_id if token is not None else "anonymous"
+            fields = {"tool": context.message.name, "client_id": client_id}
             try:
-                ip = _client_ip(get_http_request())
+                fields.update(_resolve_ips(get_http_request()))
             except RuntimeError:
-                ip = "stdio"  # stdio 传输下没有 HTTP 请求上下文
-            fields = {"tool": context.message.name, "client_id": client_id, "ip": ip}
+                fields["ip"] = "stdio"  # stdio 传输下没有 HTTP 请求上下文
             try:
                 result = await call_next(context)
             except Exception as exc:  # 失败也要留痕，便于安全统计
@@ -223,8 +259,14 @@ def _build_access_middleware():
     return AccessLogMiddleware()
 
 
-def create_mcp_server():
-    """Create the FastMCP server."""
+def create_mcp_server(*, require_auth: bool = False):
+    """Create the FastMCP server.
+
+    :param require_auth: 为 ``True`` 时，未配置 ``ELTDX_MCP_TOKENS`` 则直接拒绝
+        创建（避免 HTTP 入口在忘记配置 token 时静默裸奔）。stdio 入口保持
+        ``False`` 以便本地免鉴权使用。
+    :raises RuntimeError: ``require_auth`` 为真但没有可用 token。
+    """
 
     try:
         from fastmcp import FastMCP
@@ -237,6 +279,10 @@ def create_mcp_server():
         from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
 
         auth = StaticTokenVerifier(tokens=tokens, required_scopes=["read"])
+    elif require_auth:
+        raise RuntimeError(
+            "HTTP MCP 服务要求鉴权：请在环境变量 ELTDX_MCP_TOKENS 配置静态 token（JSON）后再启动。"
+        )
 
     server = FastMCP("eltdx", instructions="eltdx A-share quote, K-line, F10 and topic data tools.", auth=auth)
     server.add_middleware(_build_access_middleware())
@@ -256,14 +302,16 @@ def create_app():
     """构建用于部署的 FastAPI 应用，把 MCP 挂在 ``/mcp`` 路径下。
 
     通过 ``uvicorn eltdx.mcp:create_app --factory`` 运行；部署务必置于
-    HTTPS 之后，否则静态 token 会以明文传输。
+    HTTPS 之后，否则静态 token 会以明文传输。强制要求配置 token。
 
     :returns: 已挂载 MCP 子应用的 FastAPI 实例。
     """
 
+    global _HOST_RESTRICTED
     from fastapi import FastAPI
 
-    mcp_app = create_mcp_server().http_app(path="/")
+    _HOST_RESTRICTED = True
+    mcp_app = create_mcp_server(require_auth=True).http_app(path="/")
     app = FastAPI(title="eltdx-mcp", lifespan=mcp_app.lifespan)
     app.mount("/mcp", mcp_app)
     return app
@@ -279,17 +327,19 @@ def main() -> int:
 def http_main() -> int:
     """以 HTTP（Streamable HTTP）运行 MCP 服务。
 
-    监听地址通过 ``ELTDX_MCP_HOST`` / ``ELTDX_MCP_PORT`` 配置。
+    监听地址通过 ``ELTDX_MCP_HOST`` / ``ELTDX_MCP_PORT`` 配置；强制要求配置 token。
     """
 
+    global _HOST_RESTRICTED
+    _HOST_RESTRICTED = True
     host = os.environ.get("ELTDX_MCP_HOST", DEFAULT_HTTP_HOST)
     port = int(os.environ.get("ELTDX_MCP_PORT", DEFAULT_HTTP_PORT))
-    create_mcp_server().run(transport="http", host=host, port=port)
+    create_mcp_server(require_auth=True).run(transport="http", host=host, port=port)
     return 0
 
 
 def _client(*, timeout: float, host: str | None) -> TdxClient:
-    return TdxClient(host=host, timeout=timeout, heartbeat_interval=None)
+    return TdxClient(host=_check_host(host), timeout=timeout, heartbeat_interval=None)
 
 
 def _json(value: Any) -> Any:
