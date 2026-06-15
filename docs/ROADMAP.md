@@ -118,7 +118,7 @@
 - 连接池和主站测速。
 - 部分调试入口支持 `include_raw`。
 - `to_jsonable()` / `to_json()`。
-- `eltdx-mcp` MCP 工具服务。
+- `eltdx-mcp`（stdio）/ `eltdx-mcp-http`（HTTP 鉴权）MCP 工具服务。
 
 ## 7615 F10 / HTTP 资料
 
@@ -136,5 +136,5 @@
 | 模块 | 说明 |
 | --- | --- |
 | `equity` | 本地复权因子、股本和换手率计算 |
-| `mcp` | 已接入 MCP stdio 工具服务 |
+| `mcp` | 已接入 MCP 工具服务，支持 stdio 与 HTTP（静态 token 鉴权） |
 | `scripts` | smoke、字段验证、样本导出 |

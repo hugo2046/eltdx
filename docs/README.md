@@ -31,6 +31,6 @@
 
 `7615` 的 F10 / HTTP 接口已经作为 `eltdx.f10` 接入；使用者可以从 `TdxClient.f10` 或 `F10Client` 调用。
 
-MCP 工具服务通过 `eltdx-mcp` 启动，具体工具列表见 [MCP.md](MCP.md)。
+MCP 工具服务支持本地 stdio（`eltdx-mcp`）和带静态 token 鉴权的 HTTP（`eltdx-mcp-http`），具体工具列表与鉴权配置见 [MCP.md](MCP.md)。
 
 常用问题入口见 [helpers/README.md](helpers/README.md)。

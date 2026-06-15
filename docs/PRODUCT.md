@@ -37,7 +37,7 @@
 | 特殊品种涨跌停限制 | `client.limits` | `0x0452` |
 | F10、题材、公告、财务报表、估值 | `client.f10` | `7615/TQLEX` |
 | 常用场景组合调用 | `client.helpers` | 组合 7709 / F10 |
-| MCP 工具服务 | `eltdx-mcp` | 组合 7709 / F10 |
+| MCP 工具服务 | `eltdx-mcp`（stdio）、`eltdx-mcp-http`（HTTP 鉴权） | 组合 7709 / F10 |
 
 ## 对外 API 风格
 
@@ -96,10 +96,11 @@ from eltdx.protocol import COMMANDS
 print(COMMANDS["snapshots"].hex)  # 0x054c
 ```
 
-支持 MCP 的客户端可以启动工具服务：
+支持 MCP 的客户端可以启动工具服务，本地走 stdio，远程走带鉴权的 HTTP：
 
 ```bash
-eltdx-mcp
+eltdx-mcp        # 本地 stdio
+eltdx-mcp-http   # HTTP + 静态 token 鉴权
 ```
 
 ## 1.0 能力状态
@@ -113,6 +114,6 @@ eltdx-mcp
 | 握手、心跳、代码表、快照、K 线、分时、成交明细、集合竞价、股本变迁、财务、特殊涨跌停限制 | 已完成真实主站小样本验证 |
 | `0x0547` 行情增量刷新 | 单次主动刷新已验证；推送队列已接入 |
 | `7615` F10 / HTTP 网关 | 公司概况、热点题材、公告、题材行情、估值已完成真实小样本验证 |
-| MCP 工具服务 | 已接入行情快照、K 线、个股题材、题材成分股、F10 概况、热点题材和 09:25 竞价快照 |
+| MCP 工具服务 | 已接入行情快照、K 线、个股题材、题材成分股、F10 概况、热点题材和 09:25 竞价快照；支持 stdio 与 HTTP（静态 token 鉴权、JSONL 访问日志） |
 
 默认 `TdxClient()` 使用真实行情连接；内存 transport 只用于开发期验证 API 形状和单元测试。
