@@ -37,13 +37,16 @@ dev = [
   "pytest>=8.0",
 ]
 mcp = [
-  "mcp>=1.0",
+  "fastmcp>=2.0",
+  "fastapi>=0.110",
+  "loguru>=0.7",
 ]
 
 [project.scripts]
 eltdx-smoke = "eltdx.cli:smoke"
 eltdx-f10-smoke = "eltdx.cli:f10_smoke"
 eltdx-mcp = "eltdx.mcp:main"
+eltdx-mcp-http = "eltdx.mcp:http_main"
 
 [tool.hatch.build.targets.sdist]
 include = [
